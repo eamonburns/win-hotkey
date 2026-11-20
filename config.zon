@@ -1,0 +1,12 @@
+.{
+    .hotkeys = .{
+        .{
+            // Open Windows Terminal on Ctrl+Alt+T
+            .command = .{"wt.exe"},
+            .binding = .{
+                .mods = .{ .ctrl = true, .alt = true },
+                .key = .T,
+            },
+        },
+    },
+}

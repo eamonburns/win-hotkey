@@ -1,5 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
+const zon = std.zon;
 
 comptime {
     // This program is dedicated to Windows, and uses OS APIs
@@ -8,26 +9,46 @@ comptime {
 
 const log = std.log.scoped(.winkbm);
 
-const cfg: Configuration = .{
-    .hotkeys = &.{
-        .{
-            // Open Windows Terminal on Ctrl+Alt+T
-            .command = &.{"wt.exe"},
-            .binding = .{
-                .mods = .{ .ctrl = true, .shift = true },
-                .key = .@"1",
-            },
-        },
-    },
-};
-
-pub fn main(init: std.process.Init) void {
+pub fn main(init: std.process.Init) u8 {
     const io = init.io;
+    const gpa = init.gpa;
+    const arena = init.arena.allocator();
 
-    log.debug("Hotkey listener started.", .{});
+    // TODO: Relative to AppData directory (also, use an absolute path)
+    const config_path = "./config.zon";
 
-    // TODO: Read ZON file
-    const config: Configuration = cfg;
+    const config_source = Io.Dir.cwd().readFileAllocOptions(io, config_path, arena, .unlimited, .of(u8), 0) catch |err| switch (err) {
+        error.Canceled => return 0,
+        error.OutOfMemory => {
+            log.err("unable to open configuration file ({s}): out of memory", .{config_path});
+            return 1;
+        },
+        error.FileNotFound => {
+            log.err("unable to open configuration file ({s}): file not found", .{config_path});
+            return 1;
+        },
+        else => |e| {
+            log.err("unable to open configuration file ({s}): {t}", .{ config_path, e });
+            return 1;
+        },
+    };
+
+    var diagnostics: zon.parse.Diagnostics = undefined;
+    const config = zon.parse.fromSlice(Configuration, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = config_source,
+        .diagnostics = &diagnostics,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => {
+            log.err("out of memory", .{});
+            return 1;
+        },
+        error.ParseZon => {
+            diagnostics.log(config_path);
+            return 2;
+        },
+    };
 
     const num_registered = for (config.hotkeys, 0..) |hk, i| {
         if (win.RegisterHotKey(
@@ -47,9 +68,8 @@ pub fn main(init: std.process.Init) void {
     };
 
     if (num_registered != config.hotkeys.len) {
-        // FIXME: How can I exit with a non-zero exit code while also allowing the `defer`s to run?
         log.err("Only {d}/{d} hotkeys were registered", .{ num_registered, config.hotkeys.len });
-        return;
+        return 1;
     }
 
     // TODO: Don't use this
@@ -71,16 +91,16 @@ pub fn main(init: std.process.Init) void {
     var msg: win.MSG = undefined;
     while (true) {
         const result = win.GetMessageW(&msg, null, 0, 0);
-        if (result == .FALSE) return;
+        if (result == .FALSE) return 1;
         if (@backingInt(result) == -1) {
             log.err("Error getting message: {t}", .{win.GetLastError()});
-            return;
+            return 1;
         }
 
         if (msg.message == win.WM_HOTKEY) {
             if (msg.wParam == quit_binding_id) {
                 log.info("pressed quit hotkey: {f} (exiting)", .{quit_binding});
-                return;
+                return 0;
             }
 
             const hotkey_index = msg.wParam;
@@ -104,7 +124,7 @@ pub fn main(init: std.process.Init) void {
             const child = std.process.spawn(io, .{
                 .argv = command,
             }) catch |err| switch (err) {
-                error.Canceled => return,
+                error.Canceled => return 0,
                 else => {
                     log.err("unable to spawn command process: {t}", .{err});
                     continue;
