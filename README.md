@@ -1,6 +1,6 @@
 # Win Hotkey
 
-A very simple hotkey program.
+A very simple hotkey program for Windows.
 
 ## Building
 
